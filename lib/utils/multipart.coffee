@@ -19,7 +19,7 @@ getObjectStream = (headerInfo, stream, handler, options) -> new Promise (resolve
     multipartBoundary = headerInfo.contentType.match(/boundary=[^;]+/ig)?[0].slice('boundary='.length)
   if !multipartBoundary
     throw new errors.RetsProcessingError('getObject', 'Could not find multipart boundary', headerInfo)
-  
+
   parser = new MultipartParser()
   objectStream = through2.obj()
   objectStreamDone = false
@@ -31,24 +31,37 @@ getObjectStream = (headerInfo, stream, handler, options) -> new Promise (resolve
   done = false
   partDone = false
   flushed = false
-  
+
   objectStream.on 'end', () ->
     objectStreamDone = true
-  
+
   handleError = (err) ->
     if bodyStream
-      bodyStream.emit('error', err)
-      bodyStream.end()
+      try
+        stream.emit('error', err)
+      catch
+        console.log "RETS-CLIENT parser.handleError() - thrown by bodyStream.emit"
+      try
+        bodyStream.end()
+      catch
+        console.log "RETS-CLIENT parser.handleError() - thrown by bodyStream.end"
       bodyStream = null
     if objectStreamDone
       return
     if !err.error || !err.headerInfo
       err = {error: err}
-    objectStream.write(err)
-  
+    try
+      objectStream.write(err)
+    catch
+      console.log "RETS-CLIENT parser.handleError() - thrown by objectStream.write"
+
   handleEnd = () ->
+    console.log "RETS-CLIENT parser.handleEnd()"
     if done && partDone && flushed && !objectStreamDone
+      console.log "RETS-CLIENT parser.handleEnd() - calling objectStream.end()"
       objectStream.end()
+    else
+      console.log "RETS-CLIENT parser.handleEnd() - skipping objectStream.end()"
 
   parser.onPartBegin = () ->
     object =
@@ -81,11 +94,21 @@ getObjectStream = (headerInfo, stream, handler, options) -> new Promise (resolve
       if !objectStreamDone
         objectStream.write(object)
     .catch (err) ->
-      handleError(errors.ensureRetsError('getObject', err, headers))
+      console.log "RETS-CLIENT parser.onHeadersEnd() #{err} - HANDLE IT!"
+      try
+        handleError(errors.ensureRetsError('getObject', err, headers))
+      catch err
+        console.log "RETS-CLIENT parser.onHeadersEnd() - Error thrown by handleError"
     .then () ->
+      console.log "RETS-CLIENT parser.onHeadersEnd() - Either no error, or it's been handled"
       partDone = true
-      handleEnd()
+      try
+        handleEnd()
+      catch err
+        console.log "RETS-CLIENT parser.onHeadersEnd() - Error thrown by handleEnd"
     .catch (error) ->
+      console.log "RETS-CLIENT parser.onHeadersEnd() #{error}"
+      handleError(new errors.RetsStreamError("how the hell did this happen"))
       # swallowing this error, it's already been reported
     parser.onPartData = (b, start, end) ->
       if !bodyStreamDone
@@ -101,7 +124,7 @@ getObjectStream = (headerInfo, stream, handler, options) -> new Promise (resolve
     done = true
 
   parser.initWithBoundary(multipartBoundary)
-  
+
   stream.on 'error', (err) ->
     streamError = err
   interceptor = (chunk, encoding, callback) ->
@@ -115,5 +138,5 @@ getObjectStream = (headerInfo, stream, handler, options) -> new Promise (resolve
     handleEnd()
   stream.pipe(through2(interceptor, flush))
   resolve(objectStream)
-    
+
 module.exports.getObjectStream = getObjectStream
